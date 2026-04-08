@@ -1,0 +1,36 @@
+{
+  "name": "pixel-aquarium",
+  "version": "1.0.0",
+  "description": "A cozy pixel art aquarium that lives on your desktop",
+  "author": "Hesham Rashid",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.hesham.pixelaquarium",
+    "productName": "Pixel Aquarium",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "aquarium.html"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.0.0"
+  }
+}

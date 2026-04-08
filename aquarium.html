@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+
+  #drag-handle {
+    position: fixed;
+    top: 0; left: 0;
+    height: 18px;
+    /* width set by JS after we know the real widget width */
+    cursor: grab;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  #drag-handle:hover { opacity: 1; }
+  #drag-handle::after {
+    content: '';
+    width: 36px;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.55);
+    display: block;
+  }
+  #drag-handle:active { cursor: grabbing; }
+
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    position: fixed;
+    top: 0; left: 0;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="drag-handle"></div>
+
+<script>
+const C = document.getElementById('c');
+const ctx = C.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const handle = document.getElementById('drag-handle');
+
+let W = 0, H = 0;
+let fish = [];
+let initialized = false;
+
+// ── Size management ───────────────────────────────────────────
+function applySize(w, h) {
+  W = w; H = h;
+  C.width = W;
+  C.height = H;
+  C.style.width  = W + 'px';
+  C.style.height = H + 'px';
+  handle.style.width = W + 'px';   // ← pill now exactly as wide as the widget
+
+  // Re-scatter fish y-positions to fit new height
+  fish.forEach(f => {
+    f.y = 50 + Math.random() * (H - 120);
+  });
+}
+
+// ── IPC ──────────────────────────────────────────────────────
+if (window.electronAPI) {
+  // init fires once after load with the real size — spawn fish here
+  window.electronAPI.onInit(({ w, h }) => {
+    applySize(w, h);
+    fish = spawnSchool(6);
+    initialized = true;
+    window.electronAPI.setIgnoreMouse(true);
+  });
+
+  window.electronAPI.onResize(({ w, h }) => {
+    applySize(w, h);
+  });
+}
+
+// Fallback for running outside Electron (browser preview)
+setTimeout(() => {
+  if (!initialized) {
+    applySize(400, 250);
+    fish = spawnSchool(6);
+    initialized = true;
+  }
+}, 300);
+
+// ── Drag handle ──────────────────────────────────────────────
+let dragging = false, lastX = 0, lastY = 0;
+
+handle.addEventListener('mouseenter', () => {
+  if (window.electronAPI) window.electronAPI.setIgnoreMouse(false);
+});
+handle.addEventListener('mouseleave', () => {
+  if (!dragging && window.electronAPI) window.electronAPI.setIgnoreMouse(true);
+});
+handle.addEventListener('mousedown', e => {
+  dragging = true;
+  lastX = e.screenX; lastY = e.screenY;
+  e.preventDefault();
+});
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const dx = e.screenX - lastX, dy = e.screenY - lastY;
+  lastX = e.screenX; lastY = e.screenY;
+  if (window.electronAPI) window.electronAPI.dragMove(dx, dy);
+});
+window.addEventListener('mouseup', () => {
+  if (!dragging) return;
+  dragging = false;
+  if (window.electronAPI) window.electronAPI.setIgnoreMouse(true);
+});
+
+// ── Day/night cycle ──────────────────────────────────────────
+const CYCLE = 8 * 60 * 1000;
+function timeOfDay() { return (Date.now() % CYCLE) / CYCLE; }
+
+function skyColor(t) {
+  const stops = [
+    { t: 0.00, top: '#1a0a2e', bot: '#3d1f6b' },
+    { t: 0.15, top: '#1a0a2e', bot: '#3d1f6b' },
+    { t: 0.25, top: '#ff6b35', bot: '#ffa552' },
+    { t: 0.35, top: '#87ceeb', bot: '#add8e6' },
+    { t: 0.65, top: '#87ceeb', bot: '#add8e6' },
+    { t: 0.75, top: '#ff4500', bot: '#ff8c00' },
+    { t: 0.85, top: '#1a0a2e', bot: '#3d1f6b' },
+    { t: 1.00, top: '#1a0a2e', bot: '#3d1f6b' },
+  ];
+  function hexToRgb(h) { return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)]; }
+  function lerp(a,b,f) { return Math.round(a+(b-a)*f); }
+  function lerpColor(c1,c2,f) { const a=hexToRgb(c1),b=hexToRgb(c2); return `rgb(${lerp(a[0],b[0],f)},${lerp(a[1],b[1],f)},${lerp(a[2],b[2],f)})`; }
+  let i=0;
+  while(i<stops.length-1 && stops[i+1].t<=t) i++;
+  const s0=stops[i], s1=stops[Math.min(i+1,stops.length-1)];
+  const f = s1.t===s0.t ? 0 : (t-s0.t)/(s1.t-s0.t);
+  return { top: lerpColor(s0.top,s1.top,f), bot: lerpColor(s0.bot,s1.bot,f) };
+}
+
+function waterColor(t) {
+  const day=[[0x0a,0x3a,0x6e],[0x05,0x1e,0x42]];
+  const night=[[0x04,0x10,0x28],[0x02,0x08,0x18]];
+  function lerp(a,b,f) { return Math.round(a+(b-a)*f); }
+  function mix(d,n,fac) { return [lerp(d[0],n[0],fac),lerp(d[1],n[1],fac),lerp(d[2],n[2],fac)]; }
+  const nf = t<0.5 ? Math.max(0,(0.2-t)/0.2) : Math.max(0,(t-0.8)/0.2);
+  const tc=mix(day[0],night[0],nf), bc=mix(day[1],night[1],nf);
+  return { top:`rgb(${tc[0]},${tc[1]},${tc[2]})`, bot:`rgb(${bc[0]},${bc[1]},${bc[2]})` };
+}
+
+// ── Stars (fractional x so they scale) ───────────────────────
+const STARS = Array.from({length:30}, () => ({
+  xf: Math.random(), y: Math.random()*32,
+  r: Math.random()<0.3?2:1, phase: Math.random()*Math.PI*2
+}));
+
+// ── Pixel helper ─────────────────────────────────────────────
+function px(x,y,w,h,col) { ctx.fillStyle=col; ctx.fillRect(Math.round(x),Math.round(y),w,h); }
+
+// ── Fish sprites ─────────────────────────────────────────────
+const FISH_SPRITES = [
+  {
+    w:7, h:5,
+    pixels: [[2,0,'B'],[3,0,'B'],[1,1,'B'],[2,1,'A'],[3,1,'A'],[4,1,'A'],[5,1,'B'],
+             [0,2,'T'],[1,2,'A'],[2,2,'A'],[3,2,'A'],[4,2,'A'],[5,2,'A'],[6,2,'B'],
+             [1,3,'B'],[2,3,'A'],[3,3,'A'],[4,3,'A'],[5,3,'B'],[2,4,'B'],[3,4,'B']],
+    eye:[5,1], colors:{ A:'#ff8800', B:'#cc5500', T:'#ffaa33' }
+  },
+  {
+    w:8, h:5,
+    pixels: [[3,0,'B'],[4,0,'B'],[2,1,'B'],[3,1,'A'],[4,1,'A'],[5,1,'A'],[6,1,'B'],
+             [0,2,'T'],[1,2,'T'],[2,2,'A'],[3,2,'A'],[4,2,'A'],[5,2,'A'],[6,2,'A'],[7,2,'B'],
+             [2,3,'B'],[3,3,'A'],[4,3,'A'],[5,3,'A'],[6,3,'B'],[3,4,'T'],[4,4,'T']],
+    eye:[5,1], colors:{ A:'#1a6fcc', B:'#0d4499', T:'#ffd700' }
+  },
+  {
+    w:6, h:4,
+    pixels: [[1,0,'B'],[2,0,'A'],[3,0,'A'],[0,1,'T'],[1,1,'A'],[2,1,'A'],[3,1,'A'],[4,1,'A'],[5,1,'B'],
+             [0,2,'T'],[1,2,'A'],[2,2,'A'],[3,2,'A'],[4,2,'A'],[5,2,'B'],[1,3,'B'],[2,3,'A'],[3,3,'A']],
+    eye:[4,1], colors:{ A:'#e03030', B:'#881818', T:'#ff6666' }
+  }
+];
+
+function makeFish() {
+  const spr = FISH_SPRITES[Math.floor(Math.random()*FISH_SPRITES.length)];
+  const dir = Math.random()<0.5 ? 1 : -1;
+  return {
+    spr,
+    x: dir>0 ? -40 : W+40,
+    y: 55 + Math.random() * (H - 130),
+    vx: dir * (0.4 + Math.random()*0.5),
+    vy: 0,
+    wobble: Math.random()*Math.PI*2,
+    tailPhase: Math.random()*Math.PI*2,
+    scale: 2 + Math.floor(Math.random()*2),
+    blinkTimer: 40 + Math.random()*200,
+    eyeOpen: true
+  };
+}
+
+function spawnSchool(n) {
+  return Array.from({length: n}, () => {
+    const f = makeFish();
+    f.x = 20 + Math.random() * (W - 40);   // scatter across tank width
+    f.y = 55 + Math.random() * (H - 130);  // scatter within water column
+    return f;
+  });
+}
+
+// ── Decorations ───────────────────────────────────────────────
+function drawCastle(sx, sy) {
+  const S=3;
+  function b(x,y,w,h,c) { px(sx+x*S, sy+y*S, w*S, h*S, c); }
+  b(0,6,10,6,'#8888aa'); b(0,2,3,10,'#8888aa'); b(0,0,3,2,'#cc4444'); b(1,0,1,1,'#ff6666');
+  b(7,2,3,10,'#8888aa'); b(7,0,3,2,'#cc4444'); b(8,0,1,1,'#ff6666');
+  b(4,8,2,4,'#222244'); b(3,9,1,2,'#222244'); b(6,9,1,2,'#222244');
+  b(1,4,1,1,'#ffffaa'); b(8,4,1,1,'#ffffaa'); b(4,5,2,1,'#ffffaa');
+  b(0,1,1,1,'#8888aa'); b(2,1,1,1,'#8888aa'); b(7,1,1,1,'#8888aa'); b(9,1,1,1,'#8888aa');
+}
+
+function drawSeaweed(x, y, h, col) {
+  const S=2;
+  for(let i=0; i<Math.floor(h/S); i++) {
+    const ox = Math.sin(i*0.7 + performance.now()*0.001)*4;
+    px(x+ox, y-i*S, S, S, col);
+  }
+}
+
+function drawCorals(sandY) {
+  // positions as fractions of W so they scale on resize
+  const defs = [
+    { xf:0.78, cols:['#ff6b6b','#ff4444'], type:'branch' },
+    { xf:0.86, cols:['#ff9ff3','#cc55bb'], type:'fan'    },
+    { xf:0.93, cols:['#ffd700','#cc9900'], type:'round'  },
+    { xf:0.50, cols:['#44ddaa','#228866'], type:'branch' },
+    { xf:0.57, cols:['#ff8844','#cc5522'], type:'fan'    },
+  ];
+  const S=3;
+  defs.forEach(({xf, cols, type}) => {
+    const x = Math.round(xf * W);
+    if(type==='branch') {
+      px(x,sandY-6,S,6,cols[1]); px(x-S,sandY-10,S,4,cols[0]);
+      px(x+S,sandY-12,S,5,cols[0]); px(x-S*2,sandY-13,S,3,cols[1]);
+      px(x+S*2,sandY-14,S,4,cols[1]); px(x,sandY-14,S,4,cols[0]);
+    } else if(type==='fan') {
+      for(let i=-2;i<=2;i++) { const h=10-Math.abs(i)*2; px(x+i*S,sandY-h,S,h,i%2===0?cols[0]:cols[1]); }
+    } else {
+      px(x,sandY-8,S*3,S*3,cols[0]); px(x-S,sandY-6,S,S,cols[1]);
+      px(x+S*2,sandY-6,S,S,cols[1]); px(x,sandY-10,S,S,cols[0]); px(x+S,sandY-11,S,S,cols[1]);
+    }
+  });
+}
+
+function drawRocks(sandY) {
+  [{xf:0.18,w:22,h:12},{xf:0.55,w:16,h:10},{xf:0.88,w:18,h:11}].forEach(r => {
+    const x = Math.round(r.xf * W);
+    px(x,sandY-r.h+2,r.w,r.h,'#555566');
+    px(x+2,sandY-r.h,r.w-4,r.h,'#666677');
+    px(x+3,sandY-r.h,4,3,'#888899');
+  });
+}
+
+// ── Bubbles ──────────────────────────────────────────────────
+let bubbles = [];
+function spawnBubble() {
+  if (W===0) return;
+  bubbles.push({ x: 10+Math.random()*(W-20), y: H-30, vy: 0.5+Math.random()*0.7, r: 1+Math.floor(Math.random()*2), alpha: 1, wobble: Math.random()*Math.PI*2 });
+}
+setInterval(spawnBubble, 900);
+
+// ── Main draw loop ────────────────────────────────────────────
+let frame = 0;
+function draw() {
+  frame++;
+  requestAnimationFrame(draw);
+
+  if (!initialized || W === 0) return;   // don't draw until size is known
+
+  const t = timeOfDay();
+  const isNight = t<0.2 || t>0.8;
+  const sky = skyColor(t);
+  const water = waterColor(t);
+  const SAND_Y = H - 28;
+
+  // Sky strip
+  const skyGrad = ctx.createLinearGradient(0,0,0,40);
+  skyGrad.addColorStop(0, sky.top); skyGrad.addColorStop(1, sky.bot);
+  ctx.fillStyle = skyGrad; ctx.fillRect(0,0,W,40);
+
+  // Water
+  const wGrad = ctx.createLinearGradient(0,38,0,SAND_Y);
+  wGrad.addColorStop(0, water.top); wGrad.addColorStop(1, water.bot);
+  ctx.fillStyle = wGrad; ctx.fillRect(0,38,W,SAND_Y-38);
+
+  // Surface shimmer
+  ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fillRect(0,38,W,2);
+  if(frame%4<2) { ctx.fillStyle='rgba(255,255,255,0.06)'; ctx.fillRect(20+Math.sin(frame*0.04)*10,39,30,1); }
+
+  // Stars
+  if(isNight || t<0.25 || t>0.75) {
+    const sa = t<0.25 ? Math.min(1,(0.2-t)/0.1+1) : (t>0.75 ? Math.min(1,(t-0.75)/0.1) : 0);
+    STARS.forEach(s => {
+      const tw = 0.4+0.6*Math.abs(Math.sin(s.phase+frame*0.03));
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(sa,tw)*0.9})`;
+      ctx.fillRect(Math.round(s.xf*W), s.y, s.r, s.r);
+    });
+  }
+
+  // Moon / sun
+  if(isNight || t<0.25 || t>0.75) {
+    const ma = t<0.25 ? Math.min(1,(0.2-t)/0.1) : (t>0.75 ? Math.min(1,(t-0.75)/0.1) : 0);
+    ctx.fillStyle=`rgba(240,240,200,${ma})`; ctx.beginPath(); ctx.arc(60,18,8,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=`rgba(200,200,160,${ma})`; ctx.beginPath(); ctx.arc(65,15,7,0,Math.PI*2); ctx.fill();
+  } else {
+    const sa = Math.min(1, Math.min((t-0.25)/0.1,(0.75-t)/0.1));
+    ctx.fillStyle=`rgba(255,220,50,${sa})`; ctx.beginPath(); ctx.arc(W-50,15,10,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=`rgba(255,240,100,${sa*0.5})`; ctx.beginPath(); ctx.arc(W-50,15,15,0,Math.PI*2); ctx.fill();
+  }
+
+  // Sand
+  px(0,SAND_Y,W,H-SAND_Y,'#b8935a'); px(0,SAND_Y,W,3,'#c9a96e');
+  for(let i=0; i<Math.ceil(W/30); i++) {
+    px(30+i*30,SAND_Y+5,4,3,'#9c7a48');
+    px(15+i*30,SAND_Y+12,5,3,'#a88858');
+  }
+
+  drawRocks(SAND_Y);
+  drawCastle(18, SAND_Y - 18*3);
+  drawCorals(SAND_Y);
+
+  // Seaweed patch (fractional x)
+  const swX = Math.round(W * 0.32);
+  for(let i=0; i<5; i++) drawSeaweed(swX+i*8, SAND_Y, 14+Math.sin(i)*4, i%2?'#1a6a2a':'#2a7a3a');
+
+  // Bubbles
+  bubbles.forEach(b => {
+    b.y -= b.vy; b.wobble += 0.05; b.x += Math.sin(b.wobble)*0.4; b.alpha -= 0.007;
+    if(b.alpha > 0) {
+      ctx.strokeStyle=`rgba(180,220,255,${b.alpha*0.8})`; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r*2, 0, Math.PI*2); ctx.stroke();
+    }
+  });
+  bubbles = bubbles.filter(b => b.alpha>0 && b.y>0);
+
+  // Fish
+  fish.forEach(f => {
+    f.tailPhase += 0.15; f.wobble += 0.03;
+    f.vy = Math.sin(f.wobble) * 0.3;
+    f.x += f.vx; f.y += f.vy;
+    if(f.x > W+60) f.x = -40;
+    if(f.x < -60)  f.x = W+40;
+    f.y = Math.max(50, Math.min(SAND_Y-20, f.y));
+    f.blinkTimer--;
+    if(f.blinkTimer<=0) { f.eyeOpen=!f.eyeOpen; f.blinkTimer=f.eyeOpen?40+Math.random()*160:3+Math.random()*5; }
+
+    const S=f.scale, spr=f.spr, goingLeft=f.vx<0;
+    const tailWag = Math.round(Math.sin(f.tailPhase));
+    ctx.save();
+    if(goingLeft) { ctx.translate(f.x+spr.w*S, f.y); ctx.scale(-1,1); }
+    else { ctx.translate(f.x, f.y); }
+    spr.pixels.forEach(([dx,dy,code]) => {
+      ctx.fillStyle = spr.colors[code];
+      ctx.fillRect(dx*S, dx===0 ? dy*S+tailWag : dy*S, S, S);
+    });
+    const [ex,ey] = spr.eye;
+    if(f.eyeOpen) {
+      ctx.fillStyle='#111'; ctx.fillRect(ex*S,ey*S,S,S);
+      ctx.fillStyle='rgba(255,255,255,0.8)'; ctx.fillRect(ex*S+1,ey*S,1,1);
+    } else {
+      ctx.fillStyle='#111'; ctx.fillRect(ex*S, ey*S+Math.floor(S/2), S, 1);
+    }
+    ctx.restore();
+  });
+
+  // Glass edges
+  ctx.strokeStyle='rgba(180,220,255,0.15)'; ctx.lineWidth=2;
+  ctx.strokeRect(1,1,W-2,H-2);
+  ctx.fillStyle='rgba(255,255,255,0.04)';
+  ctx.fillRect(0,0,4,H); ctx.fillRect(W-4,0,4,H);
+
+  // Time indicator
+  const label = t<0.2||t>0.8 ? '★' : t<0.35||t>0.65 ? '◑' : '☀';
+  ctx.font='9px monospace'; ctx.fillStyle='rgba(255,255,255,0.35)';
+  ctx.fillText(label, W-14, 10);
+}
+
+draw();
+</script>
+</body>
+</html>
