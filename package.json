@@ -23,6 +23,13 @@
       "target": "nsis",
       "icon": "icon.ico"
     },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Utility"
+    },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
