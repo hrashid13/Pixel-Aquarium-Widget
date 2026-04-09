@@ -58,6 +58,10 @@ pixel-aquarium/
 
 The aquarium uses a plain HTML5 canvas with no external dependencies. Everything — fish AI, pixel sprites, day/night cycle, decorations — is vanilla JS.
 
+## Disclaimer
+
+It is not perfect yet! I am still working out the kinks and would love feedback on any improvements or suggestions!
+
 ## Author
 
 **Built by Hesham Rashid**
