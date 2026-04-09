@@ -62,6 +62,19 @@ The aquarium uses a plain HTML5 canvas with no external dependencies. Everything
 
 It is not perfect yet! I am still working out the kinks and would love feedback on any improvements or suggestions!
 
+For Mac:
+
+If dmg file cannot open due to "Pixel Aquarium is damaged and can't be opened error" follow the following steps:
+
+1. Open Terminal
+2. Run the following command in terminal:
+
+```
+xattr -cr ~/Downloads/"Pixel.Aquarium-1.0.0-arm64.dmg"
+```
+
+3. Re-Open the app. Make sure the file is called exactly: "Pixel.Aquarium-1.0.0-arm64.dmg" in your downloads. Should work from there
+
 ## Author
 
 **Built by Hesham Rashid**
